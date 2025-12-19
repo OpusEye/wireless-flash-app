@@ -295,7 +295,6 @@ class _DeviceScreenState extends State<DeviceScreen> {
     setState(() => _isOperationInProgress = true);
     
     int successCount = 0;
-    int current = 0;
     bool cancelled = false;
     
     final api = appState.api;
@@ -305,25 +304,28 @@ class _DeviceScreenState extends State<DeviceScreen> {
       return;
     }
     
+    // Используем ValueNotifier для обновления UI
+    final progressNotifier = ValueNotifier<_ProgressInfo>(_ProgressInfo(0, files.length, files.isNotEmpty ? files[0].path.split(Platform.pathSeparator).last : ''));
+    
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) {
+      builder: (dialogContext) => ValueListenableBuilder<_ProgressInfo>(
+        valueListenable: progressNotifier,
+        builder: (context, progress, _) {
           return AlertDialog(
             title: const Row(children: [Icon(Icons.upload_file, color: Colors.blue), SizedBox(width: 8), Text('Загрузка')]),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Файл $current из ${files.length}'),
+                Text('Файл ${progress.current + 1} из ${progress.total}'),
                 const SizedBox(height: 8),
-                if (current < files.length)
-                  Text(files[current].path.split(Platform.pathSeparator).last, style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(progress.fileName, style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 16),
-                LinearProgressIndicator(value: files.isEmpty ? 0 : current / files.length),
+                LinearProgressIndicator(value: progress.total == 0 ? 0 : progress.current / progress.total),
                 const SizedBox(height: 8),
-                Text('${(files.isEmpty ? 0 : current / files.length * 100).toStringAsFixed(0)}%'),
+                Text('${(progress.total == 0 ? 0 : progress.current / progress.total * 100).toStringAsFixed(0)}%'),
               ],
             ),
             actions: [
@@ -342,7 +344,8 @@ class _DeviceScreenState extends State<DeviceScreen> {
     
     try {
       for (int i = 0; i < files.length && !cancelled; i++) {
-        current = i;
+        final fileName = files[i].path.split(Platform.pathSeparator).last;
+        progressNotifier.value = _ProgressInfo(i, files.length, fileName);
         
         // Определяем путь назначения
         String destPath = appState.currentPath;
@@ -358,12 +361,21 @@ class _DeviceScreenState extends State<DeviceScreen> {
           }
         }
         
+        debugPrint('Uploading: $fileName to $destPath');
         final success = await api.uploadFile(destPath, files[i]);
         if (success) successCount++;
+        debugPrint('Upload result: $success');
+        
+        // Даём ESP32 время на завершение записи на SD карту
+        if (i < files.length - 1) {
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
       }
     } catch (e) {
       debugPrint('Upload exception: $e');
     }
+    
+    progressNotifier.dispose();
     
     // Закрываем диалог если он ещё открыт
     if (mounted && Navigator.of(context).canPop()) {
@@ -371,6 +383,10 @@ class _DeviceScreenState extends State<DeviceScreen> {
     }
     
     setState(() => _isOperationInProgress = false);
+    
+    // Даём ESP32 время завершить все операции с SD картой
+    await Future.delayed(const Duration(milliseconds: 500));
+    
     await appState.loadFiles(appState.currentPath);
     
     if (mounted) {
@@ -419,28 +435,30 @@ class _DeviceScreenState extends State<DeviceScreen> {
       }
       
       int successCount = 0;
-      int current = 0;
       bool cancelled = false;
+      
+      // Используем ValueNotifier для обновления UI
+      final progressNotifier = ValueNotifier<_ProgressInfo>(_ProgressInfo(0, filesToDownload.length, filesToDownload.isNotEmpty ? filesToDownload[0].split('/').last : ''));
       
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (context, setDialogState) {
+        builder: (dialogContext) => ValueListenableBuilder<_ProgressInfo>(
+          valueListenable: progressNotifier,
+          builder: (context, progress, _) {
             return AlertDialog(
               title: const Row(children: [Icon(Icons.download, color: Colors.green), SizedBox(width: 8), Text('Скачивание')]),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Файл $current из ${filesToDownload.length}'),
+                  Text('Файл ${progress.current + 1} из ${progress.total}'),
                   const SizedBox(height: 8),
-                  if (current < filesToDownload.length)
-                    Text(filesToDownload[current].split('/').last, style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(progress.fileName, style: Theme.of(context).textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 16),
-                  LinearProgressIndicator(value: filesToDownload.isEmpty ? 0 : current / filesToDownload.length),
+                  LinearProgressIndicator(value: progress.total == 0 ? 0 : progress.current / progress.total),
                   const SizedBox(height: 8),
-                  Text('${(filesToDownload.isEmpty ? 0 : current / filesToDownload.length * 100).toStringAsFixed(0)}%'),
+                  Text('${(progress.total == 0 ? 0 : progress.current / progress.total * 100).toStringAsFixed(0)}%'),
                 ],
               ),
               actions: [
@@ -459,9 +477,11 @@ class _DeviceScreenState extends State<DeviceScreen> {
       
       try {
         for (int i = 0; i < filesToDownload.length && !cancelled; i++) {
-          current = i;
           final filePath = filesToDownload[i];
+          final fileName = filePath.split('/').last;
+          progressNotifier.value = _ProgressInfo(i, filesToDownload.length, fileName);
           
+          debugPrint('Downloading: $filePath');
           final data = await api.downloadFile(filePath);
           if (data != null) {
             // Сохраняем с сохранением структуры папок
@@ -472,11 +492,14 @@ class _DeviceScreenState extends State<DeviceScreen> {
             await destFile.parent.create(recursive: true);
             await destFile.writeAsBytes(data);
             successCount++;
+            debugPrint('Downloaded: $fileName');
           }
         }
       } catch (e) {
         debugPrint('Download exception: $e');
       }
+      
+      progressNotifier.dispose();
       
       if (mounted && Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
@@ -597,4 +620,13 @@ class _DeviceScreenState extends State<DeviceScreen> {
       );
     }
   }
+}
+
+/// Класс для хранения информации о прогрессе операции
+class _ProgressInfo {
+  final int current;
+  final int total;
+  final String fileName;
+  
+  _ProgressInfo(this.current, this.total, this.fileName);
 }

@@ -91,8 +91,17 @@ class DeviceStatus {
 class DeviceApiService {
   String _baseUrl = 'http://192.168.4.1';
   static const Duration _timeout = Duration(seconds: 10);
+  static const Duration _listTimeout = Duration(seconds: 15);
+  
+  // Переиспользуемый HTTP клиент для keep-alive соединений
+  final http.Client _client = http.Client();
 
   String get baseUrl => _baseUrl;
+  
+  /// Освобождение ресурсов
+  void dispose() {
+    _client.close();
+  }
 
   void setDeviceIp(String ip) {
     _baseUrl = 'http://$ip';
@@ -101,7 +110,7 @@ class DeviceApiService {
   /// Проверка доступности устройства
   Future<bool> isDeviceAvailable() async {
     try {
-      final response = await http
+      final response = await _client
           .get(Uri.parse('$_baseUrl/api/status'))
           .timeout(_timeout);
       return response.statusCode == 200;
@@ -113,7 +122,7 @@ class DeviceApiService {
   /// Получение статуса устройства
   Future<WirelessFlashDevice?> getDeviceStatus() async {
     try {
-      final response = await http
+      final response = await _client
           .get(Uri.parse('$_baseUrl/api/status'))
           .timeout(_timeout);
       
@@ -143,31 +152,39 @@ class DeviceApiService {
     return null;
   }
 
-  /// Получение списка файлов в директории
-  Future<List<FileItem>> listFiles(String directoryPath) async {
-    try {
-      final encodedPath = Uri.encodeComponent(directoryPath);
-      final response = await http
-          .get(Uri.parse('$_baseUrl/api/list?path=$encodedPath'))
-          .timeout(_timeout);
-      
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body);
-        final files = (json['files'] as List? ?? [])
-            .map((f) => FileItem.fromJson(f))
-            .toList();
+  /// Получение списка файлов в директории с retry логикой
+  Future<List<FileItem>> listFiles(String directoryPath, {int retries = 3}) async {
+    final encodedPath = Uri.encodeComponent(directoryPath);
+    
+    for (int attempt = 0; attempt < retries; attempt++) {
+      try {
+        final response = await _client
+            .get(Uri.parse('$_baseUrl/api/list?path=$encodedPath'))
+            .timeout(_listTimeout);
         
-        // Сортировка: папки сначала, затем по имени
-        files.sort((a, b) {
-          if (a.isDirectory && !b.isDirectory) return -1;
-          if (!a.isDirectory && b.isDirectory) return 1;
-          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-        });
-        
-        return files;
+        if (response.statusCode == 200) {
+          final json = jsonDecode(response.body);
+          final files = (json['files'] as List? ?? [])
+              .map((f) => FileItem.fromJson(f))
+              .toList();
+          
+          // Сортировка: папки сначала, затем по имени
+          files.sort((a, b) {
+            if (a.isDirectory && !b.isDirectory) return -1;
+            if (!a.isDirectory && b.isDirectory) return 1;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+          
+          return files;
+        }
+      } catch (e) {
+        print('Error listing files (attempt ${attempt + 1}/$retries): $e');
+        if (attempt < retries - 1) {
+          // Экспоненциальная задержка перед повтором
+          await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+          continue;
+        }
       }
-    } catch (e) {
-      print('Error listing files: $e');
     }
     return [];
   }
@@ -176,7 +193,7 @@ class DeviceApiService {
   Future<List<int>?> downloadFile(String filePath) async {
     try {
       // Путь уже начинается с /, просто добавляем к /api/download
-      final response = await http
+      final response = await _client
           .get(Uri.parse('$_baseUrl/api/download$filePath'))
           .timeout(const Duration(minutes: 5));
       
@@ -206,6 +223,10 @@ class DeviceApiService {
       ));
       
       final response = await request.send().timeout(const Duration(minutes: 10));
+      
+      // Освобождаем ресурсы соединения
+      await response.stream.drain();
+      
       if (response.statusCode != 200) {
         print('Upload failed: ${response.statusCode}');
       }
@@ -220,7 +241,7 @@ class DeviceApiService {
   Future<bool> deleteFile(String filePath) async {
     try {
       // Путь уже начинается с /, просто добавляем к /api/delete
-      final response = await http
+      final response = await _client
           .delete(Uri.parse('$_baseUrl/api/delete$filePath'))
           .timeout(_timeout);
       
@@ -238,7 +259,7 @@ class DeviceApiService {
   Future<bool> createFolder(String folderPath) async {
     try {
       // Путь передаётся в URL: /api/mkdir/путь
-      final response = await http.post(
+      final response = await _client.post(
         Uri.parse('$_baseUrl/api/mkdir$folderPath'),
         headers: {'Content-Type': 'application/json'},
       ).timeout(_timeout);
@@ -253,7 +274,7 @@ class DeviceApiService {
   /// Сканирование WiFi сетей
   Future<List<WifiNetwork>> scanWifiNetworks() async {
     try {
-      final response = await http
+      final response = await _client
           .get(Uri.parse('$_baseUrl/api/wifi/scan'))
           .timeout(const Duration(seconds: 15));
       
@@ -272,7 +293,7 @@ class DeviceApiService {
   /// Подключение к WiFi сети
   Future<Map<String, dynamic>> connectToWifiWithDetails(String ssid, String password) async {
     try {
-      final response = await http.post(
+      final response = await _client.post(
         Uri.parse('$_baseUrl/api/wifi/connect'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'ssid': ssid, 'password': password}),
@@ -301,7 +322,7 @@ class DeviceApiService {
   /// Отключение от WiFi
   Future<bool> disconnectWifi() async {
     try {
-      final response = await http
+      final response = await _client
           .post(Uri.parse('$_baseUrl/api/wifi/disconnect'))
           .timeout(_timeout);
       

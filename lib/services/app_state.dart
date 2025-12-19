@@ -54,6 +54,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _notifyDebounce?.cancel();
+    _api.dispose(); // Освобождаем HTTP клиент
     super.dispose();
   }
 
@@ -184,13 +185,11 @@ class AppState extends ChangeNotifier {
     _safeNotify();
   }
 
-  /// Выбрать все
+  /// Выбрать все (файлы и папки)
   void selectAll() {
     _selectedFiles.clear();
     for (final f in _files) {
-      if (!f.isDirectory) {
-        _selectedFiles.add(f.path);
-      }
+      _selectedFiles.add(f.path);
     }
     _safeNotify(immediate: true);
   }
