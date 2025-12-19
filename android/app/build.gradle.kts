@@ -6,9 +6,10 @@ plugins {
 }
 
 android {
-    namespace = "com.wirelessflash.wireless_flash_app"
+    namespace = "com.example.wireless_flash_app"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // NDK не нужен для чистого Flutter приложения
+    // ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -21,7 +22,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.wirelessflash.wireless_flash_app"
+        applicationId = "com.example.wireless_flash_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
